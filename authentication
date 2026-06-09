@@ -1,0 +1,160 @@
+from fastapi import FastAPI, Depends, HTTPException
+from app.API_PROJECT import models
+from app.API_PROJECT.database import engine, SessionLocal
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from passlib.context import CryptContext
+from fastapi.security import OAuth2PasswordBearer
+from jose import jwt, JWTError
+from datetime import datetime, timedelta
+import random
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+SECRET_KEY = "your_secret_key"
+ALGORITHM = "HS256"
+
+models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+# ---------------- JWT ----------------
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+        user_id = payload.get("user_id")
+
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        return payload
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+
+    expire = datetime.utcnow() + timedelta(minutes=30)
+    to_encode.update({"exp": expire})
+
+    token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
+
+# ---------------- PASSWORD ----------------
+
+def hash_password(password: str):
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+# ---------------- SCHEMAS ----------------
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+# ---------------- DB ----------------
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ---------------- ROUTES ----------------
+
+@app.post("/signup")
+async def register(verify: UserCreate, db: Session = Depends(get_db)):
+
+    compare_user = db.query(models.Users).filter(
+        models.Users.username == verify.username
+    ).first()
+
+    if compare_user:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+    hashed_pw = hash_password(verify.password)
+
+    user = models.Users(
+        username=verify.username,
+        password=hashed_pw
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "message": "User created!"
+    }
+
+
+@app.post("/login")
+async def login(Login: UserLogin, db: Session = Depends(get_db)):
+
+    compare_user = db.query(models.Users).filter(
+        models.Users.username == Login.username
+    ).first()
+
+    if not compare_user:
+        raise HTTPException(status_code=404, detail="User Not found")
+
+    if not verify_password(Login.password, compare_user.password):
+        raise HTTPException(status_code=401, detail="Incorrect Password")
+
+    payload = {
+        "user_id": compare_user.id,
+        "username": compare_user.username
+    }
+
+    token = create_access_token(payload)
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
+
+@app.post("/weather_post")
+async def check_weather(
+    city: str,
+    current_user: dict = Depends(get_current_user)
+):
+    random_temperature = random.randint(20, 40)
+
+    return {
+        "City": city,
+        "Temperature": random_temperature,
+        "user": current_user["username"]
+    }
+
+@app.post("/mesagepost")
+async def message_post(
+    title:str
+    current_user = dict = Depends(get_current_user)
+):
+    return {
+        Create_a_post:title,
+        "user": current_user["name"]
+    }
